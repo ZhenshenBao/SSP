@@ -1,0 +1,194 @@
+ACC<-function(de=NULL,all=NULL,organism="hsa",data.dir=NULL,pathids=NULL,nB=2000,plots=FALSE,verbose=TRUE,beta=NULL,combine="fisher"){
+  
+  if(is.null(de)|is.null(all)){stop("de and all arguments can not be NULL!")}
+  
+  rel<-c("activation","compound","binding/association","expression","inhibition",
+         "activation_phosphorylation","phosphorylation","inhibition_phosphorylation",
+         "inhibition_dephosphorylation","dissociation","dephosphorylation",
+         "activation_dephosphorylation","state change","activation_indirect effect",
+         "inhibition_ubiquination","ubiquination", "expression_indirect effect",
+         "inhibition_indirect effect","repression","dissociation_phosphorylation",
+         "indirect effect_phosphorylation","activation_binding/association",
+         "indirect effect","activation_compound","activation_ubiquination")
+  
+  
+  
+  if(is.null(beta)){
+    beta=c(1,0,0,1,-1,1,0,-1,-1,0,0,1,0,1,-1,0,1,-1,-1,0,0,1,0,1,1)
+    names(beta)<-rel
+  }else{
+    
+    if(!all(names(beta) %in% rel) | length(names(beta))!=length(rel)){
+      stop(paste("beta must be a numeric vector of length",length(rel), "with the following names:", "\n", paste(rel,collapse=",")))
+    }
+  }
+  
+  
+  .myDataEnv <- new.env(parent=emptyenv()) # not exported
+  
+  datload<-paste(organism, "SPIA", sep = "")
+  
+  if(is.null(data.dir)){
+    if(! paste(datload,".RData",sep="") %in% dir(system.file("extdata",package="SPIA"))){
+      cat("The KEGG pathway data for your organism is not present in the extdata folder of the SPIA package!!!")
+      cat("\n");
+      cat("Please generate one first using makeSPIAdata and specify its location using data.dir argument or copy it in the extdata folder of the SPIA package!")
+    } else{
+      load(file=paste(system.file("extdata",package="SPIA"),paste("/",organism, "SPIA", sep = ""),".RData",sep=""), envir=.myDataEnv)
+    }
+  }
+  if(!is.null(data.dir)){
+    if (! paste(datload,".RData",sep="") %in% dir(data.dir)) {
+      cat(paste(data.dir, " does not contin a file called ",paste(datload,".RData",sep="")))
+      
+    }else{
+      load(file=paste(data.dir,paste(datload,".RData",sep=""),sep=""), envir=.myDataEnv)
+    }
+  }
+  
+  
+  
+  datpT=.myDataEnv[["path.info"]]
+  
+  if (!is.null(pathids)){
+    if( all(pathids%in%names(datpT))){
+      datpT=datpT[pathids]
+    }else{
+      stop( paste("pathids must be a subset of these pathway ids: ",paste(names(datpT),collapse=" "),sep=" "))
+    }
+  }
+  
+  datp<-list();
+  path.names<-NULL
+  hasR<-NULL
+  
+  for (jj in 1:length(datpT)){
+    sizem<-dim(datpT[[jj]]$activation)[1]
+    s<-0;
+    con<-0;
+    
+    for(bb in 1:length(rel)){
+      con=con+datpT[[jj]][[rel[bb]]]*abs(sign(beta[rel[bb]]))
+      s=s+datpT[[jj]][[rel[bb]]]*beta[rel[bb]]
+    }
+    z=matrix(rep(apply(con,2,sum),dim(con)[1]),dim(con)[1],dim(con)[1],byrow=TRUE); 
+    z[z==0]<-1;
+    
+    datp[[jj]]<- s/z
+    
+    path.names<-c(path.names,datpT[[jj]]$title)
+    hasR<-c(hasR,datpT[[jj]]$NumberOfReactions>=1) 
+  } 
+  
+  names(datp)<-names(datpT)
+  names(path.names)<-names(datpT)
+  
+  tor<-lapply(datp,function(d){sum(abs(d))})==0 | hasR | is.na(path.names)
+  datp<-datp[!tor]
+  path.names<-path.names[!tor]
+  
+  
+  
+  IDsNotP<-names(de)[!names(de)%in%all]
+  if(length(IDsNotP)/length(de)>0.01){stop("More than 1% of your de genes have IDs are not present in the reference array!. Are you sure you use the right reference array?")}
+  if(!length(IDsNotP)==0){cat("The following IDs are missing from all vector...:\n"); 
+    cat(paste(IDsNotP,collapse=","));
+    cat("\nThey were added to your universe...");
+    all<-c(all,IDsNotP)} 
+  
+  if(length(intersect(names(de),all))!=length(de)){stop("de must be a vector of log2 fold changes. The names of de should be included in the refference array!")}
+  
+  pSize<-smPFS<-KEGGLINK<-NULL;
+  set.seed(1)
+  
+  if(plots){ 
+    pdf("SPIAPerturbationPlots.pdf")
+    
+  }
+  
+  pfss <- NULL
+  pfsnames <- NULL
+  for(i in 1:length(names(datp))){
+    path<-names(datp)[i]
+    M<-datp[[path]]
+    diag(M)<-diag(M)-1;
+    X<-de[rownames(M)]
+    noMy<-sum(!is.na(X))
+    okg<-intersect(rownames(M),all)
+    pSize[i]<-length(okg)
+    
+    if((noMy)>0&(abs(det(M))>1e-7)){
+      gnns<-paste(names(X)[!is.na(X)],collapse="+")
+      KEGGLINK[i]<-paste("http://www.genome.jp/dbget-bin/show_pathway?",organism,names(datp)[i],"+",gnns,sep="")
+      X[is.na(X)]<-0.0
+      pfs<-solve(M,-X)
+      names(pfs) <- names(X)
+      pfss <- c(pfss,pfs)
+      pfsnames <- c(pfsnames,names(X))
+    }
+  }
+  
+  
+  Name=path.names[names(datp)]
+  
+  res <- data.frame(pfsnames,pfss,stringsAsFactors=FALSE)
+  res<-res[!is.na(res$pfsnames),]
+  res
+}
+
+
+anot <- GPL9188
+anot <- as.data.frame(anot)
+colnames(anot) <- c("ID","ENTREZID")
+anot <- as.data.frame(anot)
+samples <- GSE30550_series_matrix[1,]
+exdata <- GSE30550_series_matrix[-1,]
+colnames(exdata) <- exdata[1,]
+exdata <- exdata[-1,]
+rownames(exdata) <- exdata$ID_REF
+exdata <- exdata[,-1]
+esetm = exdata[rownames(exdata) %in% anot$ID, ]
+esetm$ENTREZID <- as.character(anot$ENTREZID[match(rownames(esetm), anot$ID)])
+esetm<-esetm[!is.na(esetm$ENTREZID),]
+esetm<-esetm[!duplicated(esetm$ENTREZID),]
+rownames(esetm) <- esetm$ENTREZID
+#esetm <- esetm[,-1]
+esetm <- esetm[,1:268]
+samples <- samples[-1]
+circsp<-strsplit(as.character(samples),",")
+samples<-do.call(rbind,circsp)
+tts <- cbind(samples,colnames(esetm))
+subjects <- tts[,1]
+subjects <- subjects[!duplicated(subjects)]
+
+
+for(i in 1:14){
+  sams17 <- tts[which(tts[,1]==subjects[[i]]),]
+  samsone <- sams17[,3]
+  #DE_Colorectal <- esetm[,samsone[2]]/esetm[,samsone[1]]
+  DE_Colorectal <- log2(esetm[,samsone[2]]/esetm[,samsone[1]])
+  names(DE_Colorectal) <- rownames(esetm)
+  ALL_Colorectal <- rownames(esetm)
+  ACCs <- ACC(de=DE_Colorectal,all=ALL_Colorectal,organism="hsa",nB=2000,plots=FALSE,beta=NULL,combine="fisher",verbose=FALSE)
+  for(j in 3:length(samsone)){
+    #DE_Colorectal <- esetm[,samsone[j]]/esetm[,samsone[1]]
+    DE_Colorectal <- log2(esetm[,samsone[j]]/esetm[,samsone[1]])
+    names(DE_Colorectal) <- rownames(esetm)
+    ALL_Colorectal <- rownames(esetm)
+    res <- ACC(de=DE_Colorectal,all=ALL_Colorectal,organism="hsa",nB=2000,plots=FALSE,beta=NULL,combine="fisher",verbose=FALSE)
+    ACCs <- cbind(ACCs,res$pfss)
+  }
+  colnames(ACCs) <- c("",sams17[2:16,2])
+  colnames(ACCs1) <- c("",sams17[3:16,2])
+  sds <- ACCs
+  for(ii in 1:nrow(ACCs)){
+    for(iii in 1:13){
+      sds[ii,4+iii] <- abs(var(as.vector(c(t(ACCs[ii,2:4]),ACCs[ii,4+iii])))-var(as.vector(c(t(ACCs[ii,2:4])))))
+    }
+  }
+  sds[,2] <- 0
+  sds[,3] <- 0
+  sds[,4] <- 0
+  #write.csv(sds,paste("sds",subjects[[i]],".csv",sep=""))
+  write.csv(sds,paste("ACCs",subjects[[i]],".csv",sep=""))
+}
